@@ -1,64 +1,3 @@
-// const express = require("express");
-// const router = express.Router();
-// const AWS = require("aws-sdk");
-
-// // Save and Create Lambda Function
-// router.post("/save", async (req, res) => {
-//   const { awsAccessKeyId, awsSecretAccessKey, lambdaCode } = req.body;
-
-//   const lambda = new AWS.Lambda({
-//     accessKeyId: awsAccessKeyId,
-//     secretAccessKey: awsSecretAccessKey,
-//     region: "us-east-1", // You can change this or pass via frontend
-//   });
-
-//   try {
-//     const functionName = "DashboardLambdaFunc";
-//     const params = {
-//       FunctionName: functionName,
-//       Runtime: "nodejs18.x",
-//       Role: "arn:aws:iam::your-account-id:role/your-lambda-execution-role", // Update this!
-//       Handler: "index.handler",
-//       Code: {
-//         ZipFile: Buffer.from(lambdaCode), // Should be zipped properly in real apps
-//       },
-//     };
-
-//     const result = await lambda.createFunction(params).promise();
-//     res.status(200).json({ message: "Lambda created", functionArn: result.FunctionArn });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ error: error.message });
-//   }
-// });
-
-// // Trigger Lambda
-// router.post("/trigger", async (req, res) => {
-//   const { awsAccessKeyId, awsSecretAccessKey } = req.body;
-
-//   const lambda = new AWS.Lambda({
-//     accessKeyId: awsAccessKeyId,
-//     secretAccessKey: awsSecretAccessKey,
-//     region: "us-east-1",
-//   });
-
-//   try {
-//     const result = await lambda
-//       .invoke({
-//         FunctionName: "DashboardLambdaFunc",
-//         Payload: JSON.stringify({ trigger: "from-dashboard" }),
-//       })
-//       .promise();
-
-//     res.status(200).json({ message: result.Payload });
-//   } catch (err) {
-//     console.error(err);
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
-// module.exports = router;
-
 
 const express = require("express");
 const router = express.Router();
@@ -123,8 +62,12 @@ async function createLambdaExecutionRole(iam) {
 
 // Save & Deploy Lambda
 router.post("/save", async (req, res) => {
-  const { awsAccessKeyId, awsSecretAccessKey, lambdaCode } = req.body;
-  console.log("🚨 Received Secret Key:", awsSecretAccessKey);
+  const { awsAccessKeyId, awsSecretAccessKey, lambdaCode, lambdaName } = req.body;
+  console.log("🚨 Received Lambda Name:", lambdaName);
+
+  if (!lambdaName || !lambdaCode || !awsAccessKeyId || !awsSecretAccessKey) {
+    return res.status(400).json({ error: "Missing required parameters." });
+  }
 
   const region = "us-east-1";
   const credentials = {
@@ -136,8 +79,6 @@ router.post("/save", async (req, res) => {
   const iam = new AWS.IAM(credentials);
 
   try {
-    const functionName = "DashboardLambdaFunc";
-
     // 1. Create role (or get existing)
     const roleArn = await createLambdaExecutionRole(iam);
 
@@ -160,25 +101,22 @@ router.post("/save", async (req, res) => {
 
     const zipFileBuffer = fs.readFileSync(zipPath);
 
-    // 3. Create the Lambda function
+    // 3. Create or update the Lambda function
     const params = {
-      FunctionName: functionName,
+      FunctionName: lambdaName,
       Runtime: "nodejs18.x",
       Role: roleArn,
       Handler: "index.handler",
-      Code: {
-        ZipFile: zipFileBuffer,
-      },
+      Code: { ZipFile: zipFileBuffer },
       Timeout: 10,
       Publish: true,
     };
 
-    // Check if it already exists, then update instead
     try {
-      await lambda.getFunction({ FunctionName: functionName }).promise();
+      await lambda.getFunction({ FunctionName: lambdaName }).promise();
       await lambda
         .updateFunctionCode({
-          FunctionName: functionName,
+          FunctionName: lambdaName,
           ZipFile: zipFileBuffer,
           Publish: true,
         })
@@ -187,7 +125,7 @@ router.post("/save", async (req, res) => {
       await lambda.createFunction(params).promise();
     }
 
-    res.status(200).json({ message: "✅ Lambda deployed successfully" });
+    res.status(200).json({ message: `✅ Lambda '${lambdaName}' deployed successfully` });
   } catch (error) {
     console.error("❌ Error creating Lambda:", error);
     res.status(500).json({ error: error.message });
@@ -196,7 +134,11 @@ router.post("/save", async (req, res) => {
 
 // Trigger Lambda
 router.post("/trigger", async (req, res) => {
-  const { awsAccessKeyId, awsSecretAccessKey } = req.body;
+  const { awsAccessKeyId, awsSecretAccessKey, lambdaName } = req.body;
+
+  if (!lambdaName || !awsAccessKeyId || !awsSecretAccessKey) {
+    return res.status(400).json({ error: "Missing required parameters." });
+  }
 
   const lambda = new AWS.Lambda({
     accessKeyId: awsAccessKeyId,
@@ -207,12 +149,12 @@ router.post("/trigger", async (req, res) => {
   try {
     const result = await lambda
       .invoke({
-        FunctionName: "DashboardLambdaFunc",
+        FunctionName: lambdaName,
         Payload: JSON.stringify({ trigger: "from-dashboard" }),
       })
       .promise();
 
-    res.status(200).json({ message: "✅ Lambda triggered", result });
+    res.status(200).json({ message: `✅ Lambda '${lambdaName}' triggered`, result });
   } catch (err) {
     console.error("❌ Error triggering Lambda:", err);
     res.status(500).json({ error: err.message });
@@ -220,5 +162,3 @@ router.post("/trigger", async (req, res) => {
 });
 
 module.exports = router;
-
-
