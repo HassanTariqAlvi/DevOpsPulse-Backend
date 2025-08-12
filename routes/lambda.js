@@ -1,7 +1,9 @@
-
 const express = require("express");
 const router = express.Router();
 const AWS = require("aws-sdk");
+const fs = require("fs");
+const archiver = require("archiver");
+const path = require("path");
 
 const roleName = "DashboardLambdaExecutionRole";
 
@@ -83,9 +85,6 @@ router.post("/save", async (req, res) => {
     const roleArn = await createLambdaExecutionRole(iam);
 
     // 2. Zip the Lambda code
-    const fs = require("fs");
-    const archiver = require("archiver");
-    const path = require("path");
     const zipPath = path.join(__dirname, "lambda.zip");
     const output = fs.createWriteStream(zipPath);
     const archive = archiver("zip");
@@ -125,7 +124,49 @@ router.post("/save", async (req, res) => {
       await lambda.createFunction(params).promise();
     }
 
-    res.status(200).json({ message: `✅ Lambda '${lambdaName}' deployed successfully` });
+    // 4. Create or update Function URL config with public access
+    let functionUrlConfig;
+    try {
+      functionUrlConfig = await lambda.getFunctionUrlConfig({ FunctionName: lambdaName }).promise();
+
+      // Update to ensure AuthType NONE
+      if (functionUrlConfig.AuthType !== "NONE") {
+        functionUrlConfig = await lambda.updateFunctionUrlConfig({
+          FunctionName: lambdaName,
+          AuthType: "NONE",
+        }).promise();
+      }
+    } catch {
+      // Create if does not exist
+      functionUrlConfig = await lambda.createFunctionUrlConfig({
+        FunctionName: lambdaName,
+        AuthType: "NONE",
+      }).promise();
+    }
+
+    // 5. Add permission for public invoke (ignore if exists)
+    try {
+      await lambda.addPermission({
+        FunctionName: lambdaName,
+        StatementId: "FunctionURLAllowPublicAccess",
+        Action: "lambda:InvokeFunctionUrl",
+        Principal: "*",
+        FunctionUrlAuthType: "NONE",
+      }).promise();
+      console.log("✅ Public invoke permission added");
+    } catch (err) {
+      if (err.code === "ResourceConflictException") {
+        console.log("Public invoke permission already exists");
+      } else {
+        throw err;
+      }
+    }
+
+    // 6. Return the public function URL
+    res.status(200).json({
+      message: `✅ Lambda '${lambdaName}' deployed successfully with public URL`,
+      functionUrl: functionUrlConfig.FunctionUrl,
+    });
   } catch (error) {
     console.error("❌ Error creating Lambda:", error);
     res.status(500).json({ error: error.message });
